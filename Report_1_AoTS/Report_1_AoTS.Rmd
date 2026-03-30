@@ -1,0 +1,482 @@
+---
+title: "Sprawozdanie - Lista 1"
+author: "Mateusz Skuza"
+subtitle: "Analiza szeregów czasowych"
+date: "`r Sys.Date()`"
+header-includes:
+   - \usepackage{longtable}
+   - \usepackage{booktabs}
+   - \usepackage{graphicx}
+   - \usepackage{float}
+   - \usepackage{polyglossia}
+   - \setdefaultlanguage{polish}
+   - \renewcommand{\contentsname}{Spis treści}
+   - \usepackage{placeins}
+output:
+  pdf_document:
+    toc: true
+    fig_caption: true
+    fig_width: 9
+    fig_height: 8
+    number_sections: true
+    latex_engine: xelatex
+    keep_tex: true
+    dev: "cairo_pdf"
+fontsize: 12pt
+---
+
+```{r setup, include=FALSE, cache=TRUE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "", fig.align = "center")
+knitr::opts_chunk$set(dev = "CairoPDF")
+options(encoding = "UTF-8")
+```
+
+```{r, echo =FALSE, warning=FALSE, message=FALSE}
+library(arules)
+library(dplyr)
+library(knitr)
+library(ipred)
+library(forecast)
+library(ggplot2)
+```
+
+\newpage
+
+# Diagnostyka graficzna i statystyczna białoszumowości szeregów
+
+## Wprowadzenie
+
+W ramach zadania analizujemy sztucznie wygenerowane szeregi czasowe, takie jak:
+
+* Szum IID,
+* Model ruchomej średniej rzędu 1,
+* Błądzenie losowe,
+* Szum IID z trendem liniowym, 
+* Biały szum o rozkładzie wykładniczym.
+ 
+Celem zadania jest zilustrowanie działania testu graficznego opartego na funkcji autokorelacji oraz wybranych formalnych testów statystycznych służących do weryfikacji hipotezy, że obserwowany szereg czasowy jest procesem białego szumu. Test przeprowadzamy na asymptotycznym poziomie istotności równym $\alpha$.
+
+Przebieg analizy można podzielić na dwa etapy:
+
+* Przeprowadzenie testu graficznego opartego na funkcji autokorelacji (ACF), porównującego autokorelacje próbkowe z asymptotycznymi granicami istotności wynikającymi z własności białego szumu.
+
+* Przeprowadzenie formalnych testów statystycznych przy wykorzystaniu statystyk testowych Boxa-Pierce'a czy Ljungi-Boxa.
+
+\newpage
+
+
+
+## Test graficzny oparty na funkcji autokorelacji (ACF) 
+
+Reguła identyfikacji modelu nazywana również graficznym testem białoszumowości mówi, że:
+
+Szereg możemy uznać za realizację białego szumu, jeżeli:
+
+* Co najmniej 95% autokorelacji próbkowych znajduje się w przedziale $\pm \frac{1,96}{\sqrt{n}}$,
+
+* Nie powinno być autokorelacji "istotnie" wychodzących poza przedziały ufności $\pm \frac{1,96}{\sqrt{n}}$.
+
+Do przeprowadzenia testu graficznego na sztucznie wygenerowanych szeregach czasowych, wykorzystamy funkcję `ggtsdisplay`, która wyświetla wykres realizacji szeregu, wykres ACF (korelogram) z przedziałami ufności oraz wykres rozrzutu między dwoma kolejnymi obserwacjami szeregu (dzięki opcji `plot.type`).
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+set.seed(123)
+n <- 100
+alpha <- 0.05 
+szum_iid <- ts(rnorm(n))
+ggtsdisplay(szum_iid, plot.type = "scatter" ,main= "Szum IID")
+```
+
+Na podstawie wykresu widać, że Szum IID jest białym szumem, wszystkie autokorelacje mieszczą się w pasmach ufności, a ich wartości są bliskie zeru.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+theta = 0.5
+MA1 <- arima.sim(n=n, model = list(ma=theta))
+ggtsdisplay(MA1, plot.type = "scatter" ,main= "Model ruchomej średniej rzędu 1")
+```
+
+Na podstawie wykresu widać, że model ruchomej średniej nie jest białym szumem, co prawda  warunek dotyczący częstości wpadania autokorelacji można uznać za spełniony, jednak autokorelacja dla opóźnienia czasowego równego 1 znacznie przekracza pasmo ufności, wskazując na zależności czasowe.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+bladzenie_losowe <- ts(cumsum(rnorm(n)))
+ggtsdisplay(bladzenie_losowe, plot.type = "scatter" ,main= "Błądzenie losowe")
+```
+
+Na podstawie wykresu widać, że błądzenie losowe nie jest białym szumem, większość autokorelacji przekracza pasmo ufności i jest malejąca, co świadczy o silnej zależności czasowej.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+delta <- 0.2
+WN <- rnorm(n)
+trend.liniowy <- delta*time(WN)
+ggtsdisplay(trend.liniowy, plot.type = "scatter" ,main= "Szum IID z trendem liniowym")
+```
+
+Na podstawie wykresu widać, że Szum IID z trendem liniowym wyraźnie pokazuje nielosową strukturę a  wszystkie widoczne autokorelacje przekraczają pasmo ufności. Z tego łatwo można wywnioskować, że nie jest on białym szumem. 
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+szum_exp <- rexp(n, rate = 1)
+ggtsdisplay(szum_exp, plot.type = "scatter" ,main= "Biały szum o rozkładzie wykładniczym")
+```
+
+Na wykresie nie widać żadnej regularnej struktury, a wszystkie autokorelacje mieszczą się w pasmach ufności. Z tego łatwo można wywnioskować, że analizowany szereg to realizacja białego szumu. 
+
+
+## Formalne testy statystyczne
+
+Podstawowymi testami opartymi na funkcji autokorelacji są:
+
+* Test Boxa-Pierce'a,
+* Test Ljungi-Boxa.
+
+Idea tych testów jest taka, że zamiast sprawdzać dla każdego $h$ czy autokorelacja próbkowa znajduje się między przedziałami $\pm \frac{1,96}{\sqrt{n}}$, analizujemy pojedynczą wartość,  tzn. statystykę testową opartą na ACF dla kilku/kilkudziesięciu początkowych opóźnień.
+
+W przypadku testu Boxa-Pierce'a postać statystyki testowej wygląda następująco: $Q_{BP} = n \sum_{j=1}^{h} \hat{\rho}^2(j)$,  gdzie $h$ oznacza pewne maksymalne opóźnienie, a  $\hat{\rho}(j)$ to próbkowa autokorelacja dla opóźnienia $j$. 
+
+W przypadku testu Ljungi-Boxa postać statystyki testowej wygląda następująco: $Q_{LB} = n(n+2) \sum_{j=1}^{h} \frac{\hat{\rho}^2(j)}{n-j}$.
+
+Duże wartości $Q_{BP}$ i $Q_{LB}$ będą oznaczały, że ACF są zbyt duże, aby uznać dane za realizacje białego szumu. Aby stwierdzić czy ta wartości są zbyt duże, wykorzystujemy wskaźnik *p-value* dla ustalonego poziomu istotności $\alpha=0.05$. 
+Do obliczenia tych statystyk zostanie wykorzystana funkcja `Box.test` z pakietu `stats`.
+
+**Testy Boxa-Pierce'a i Ljungi-Boxa dla szumu IID**
+
+```{r, warning = FALSE, message=FALSE}
+h.max <- floor(n/4)
+BP_szum_iid <- Box.test(szum_iid, type="Box-Pierce", lag=h.max)
+LB_szum_iid <- Box.test(szum_iid, type="Ljung-Box",  lag=h.max)
+
+```
+
+Dla testu Boxa-Pierce'a wartość *p-value* jest równa `r round(BP_szum_iid$p.value, 4)`. Dla testu Ljungi-Boxa  wartość *p-value* jest równa `r round(LB_szum_iid$p.value, 4)`, zatem w obydwu przypadkach wartość *p-value* znacznie przekracza poziom istotności $\alpha=0.05$, czyli mamy do czynienia z szeregiem typu biały szum.
+
+**Testy Boxa-Pierce'a i Ljungi-Boxa dla modelu ruchomej średniej**
+
+```{r, warning = FALSE, message=FALSE}
+BP_ma1 <- Box.test(MA1, type="Box-Pierce", lag=h.max)
+LB_ma1 <- Box.test(MA1, type="Ljung-Box",  lag=h.max)
+```
+
+Dla testu Boxa-Pierce'a wartość  *p-value* jest równa `r round(BP_ma1$p.value, 4)`. Dla testu Ljungi-Boxa  wartość *p-value* jest równa `r round(LB_ma1$p.value, 4)`, zatem w obu przypadkach wartość *p-value* znacznie przekracza poziom istotności $\alpha=0.05$, czyli według testów mamy do czynienia z szeregiem typu biały szum, co nie jest prawdą.
+
+**Testy Boxa-Pierce'a i Ljungi-Boxa dla błądzenia losowego**
+
+```{r, warning=FALSE, message=FALSE, fig.height=4}
+BP_rw <- Box.test(bladzenie_losowe, type="Box-Pierce", lag=h.max)
+LB_rw <- Box.test(bladzenie_losowe, type="Ljung-Box",  lag=h.max)
+```
+
+Dla testu Boxa-Pierce'a wartość *p-value* jest bliska `r round(BP_rw$p.value, 4)`. Dla testu Ljungi-Boxa  wartość *p-value* również jest bliska `r round(LB_rw$p.value, 4)`, zatem w obydwu przypadkach wartość *p-value* jest dużo mniejsza od wartości poziomu istotności $\alpha=0.05$, czyli według testów ten szereg nie jest białym szumem.
+
+**Testy Boxa-Pierce'a i Ljungi-Boxa dla szumu IID z trendem liniowym**
+
+```{r, warning=FALSE, message=FALSE, fig.height=4}
+BP_tl <- Box.test(trend.liniowy, type="Box-Pierce", lag=h.max)
+LB_tl <- Box.test(trend.liniowy, type="Ljung-Box",  lag=h.max)
+```
+
+Dla testu Boxa-Pierce'a  wartość *p-value* jest bliska `r round(BP_tl$p.value, 4)`. Dla testu Ljungi-Boxa wartość *p-value* również jest bliska `r round(LB_tl$p.value, 4)`, zatem w obydwu przypadkach wartość *p-value* jest dużo mniejsza od wartości poziomu istotności $\alpha=0.05$, czyli według testów ten szereg nie jest białym szumem.
+
+**Testy Boxa-Pierce'a i Ljungi-Boxa dla białego szumu o rozkładzie wykładniczym**
+
+```{r, warning=FALSE, message=FALSE, fig.height=4}
+BP_exp <- Box.test(szum_exp, type="Box-Pierce", lag=h.max)
+LB_exp <- Box.test(szum_exp, type="Ljung-Box",  lag=h.max)
+```
+
+Dla testu Boxa-Pierce'a wartość *p-value* jest równa `r round(BP_exp$p.value, 4)`. Dla testu Ljungi-Boxa  wartość *p-value* jest równa `r round(LB_exp$p.value, 4)`, zatem w obydwu przypadkach wartość *p-value* znacznie przekracza poziom istotności $\alpha=0.05$, czyli mamy do czynienia z szeregiem typu biały szum.
+
+## Wnioski
+
+* Dla powyższych szeregów testy graficzne w każdej sytuacji poprawnie weryfikowały hipotezę czy analizowany szereg jest szeregiem typu biały szum, natomiast formalne testy statytystyczne mylnie zakwalifikowały model o ruchomej średniej do szeregów typu biały szum.
+
+* Błąd w testach statystycznych jest efektem niskiej mocy testów przy dużej liczbie powtórzeń, w procesie MA(1) tylko pierwsza autokorelacja jest niezerowa, przez co jej wpływ zanika w sumie 25 opóźnień czasowych.
+
+
+# Symulacyjne porównanie mocy i rozmiaru testów białoszumowości
+
+## Wprowadzenie
+
+Celem tej części jest symulacyjne porównanie dwóch podejść do testowania białoszumowości z poprzedniego zadania: testu graficznego opartego na funkcji autokorelacji oraz formalnych testów Boxa-Pierce'a i Ljungi-Boxa. Chcemy zweryfikować, jak często poszczególne testy poprawnie weryfikują hipotezę, że obserwowany szereg czasowy jest procesem białego szumu w różnych sytuacjach:
+
+* dla różnych rozkładów,
+* różnej długości szeregów, 
+* różnego wyboru maksymalnego opóźnienia,
+* dla procesów, które nie są białym szumem.
+
+W eksperymentach symulacyjnych wygenerujemy wielokrotne realizacje o liczbie $N$ powtórzeń, gdzie $N \in \{100, 500, 1000\}$ szeregów czasowych długości $n \in \{25, 50, 100\}$. Rozważymy trzy różne rozkłady dla szumu IID: 
+
+* rozkład normalny $\mathcal{N}(0, 1)$,
+* rozkład wykładniczy $\mathcal{E}(1)$, 
+* rozkład Bernoulliego $\mathcal{B}(0, 1)$.
+
+Oprócz tego przeanalizujemy szeregi, które nie są białym szumem: 
+
+* Model ruchomej średniej rzędu 1,
+* Błądzenie losowe,
+* Szum IID z trendem liniowym.
+
+Dla każdej kombinacji modelu, długości szeregu, liczby powtórzeń oraz maksymalnego opóźnienia obliczymy częstość odrzucenia hipotezy o białoszumowości przez test graficzny oraz testy Boxa-Pierce'a i Ljungi-Boxa.
+
+Dla każdego scenariusza wygenerujemy wiele realizacji danych, a następnie dla każdej realizacji ocenimy, czy dany test odrzuca hipotezę zerową o białoszumowości. Do weryfikacji hipotezy o białoszumowości zaimplementujemy funkcje:
+
+* `test_graficzny` zwracającą wartość 0 lub 1 w zależności, czy test przyjął hipotezę o białoszumowości (0 - nie przyjął, 1 - przyjął)
+
+* `testy_statystyczne` zwracająca wartość 0 lub 1 w zależności, czy testy Boxa-Pierce'a i Ljungi-Boxa przyjęły hipotezę o białoszumowości (0 - nie przyjęły, 1 - przyjęły)
+
+Dla każdej konfiguracji obliczymy częstość odrzucenia, które pozwolą nam wywnioskować, które parametry w którym modelu najbardziej wpływają na skuteczność poszczególnych testów.
+
+```{r, echo=FALSE}
+test_graficzny <- function(x, h.max = NULL, alpha = 0.05) {
+  
+  if (is.matrix(x)) {
+    return(apply(x, 2, test_graficzny, h.max = h.max, alpha = alpha))
+  }
+  
+  x <- as.numeric(x)
+  n <- length(x)
+  
+  if (is.null(h.max)) h.max <- floor(n / 4)
+  ac <- acf(x, plot = FALSE, lag.max = h.max)$acf[-1]
+  przedzial_95 <- 1.96 / sqrt(n)
+  przekroczenia_3sigma <- 3 / sqrt(n)
+  warunek1 <- mean(abs(ac) <= przedzial_95) >= 0.95
+  warunek2 <- all(abs(ac) <= przekroczenia_3sigma)
+  return(as.integer(warunek1 & warunek2))
+}
+
+testy_statystyczne <- function(x, h.max = NULL, alpha = 0.05,
+                           type = c("Box-Pierce", "Ljung-Box")) {
+  type <- match.arg(type)
+  
+  if (is.matrix(x)) {
+    res <- apply(x, 2, testy_statystyczne,
+                 h.max = h.max,
+                 alpha = alpha,
+                 type = type)
+    return(unlist(res))
+  }
+  
+  x <- as.numeric(x)
+  n <- length(x)
+  if (is.null(h.max)) {
+    h.max <- floor(n / 4)
+  }
+  
+  testy <- Box.test(x, lag = h.max, type = type)
+  as.integer(testy$p.value >= alpha)
+}
+```
+
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+szereg <- function(model, n) {
+  if (model == "BS_norm") {
+    return(rnorm(n))
+  }
+  if (model == "BS_exp") {
+    return(rexp(n, rate = 1))
+  }
+  if (model == "BS_ber") {
+    return(sample(c(0, 1), size = n, replace = TRUE))
+  }
+  if (model == "MA1") {
+    return(as.numeric(arima.sim(model = list(ma = 0.5), n = n)))
+  }
+  if (model == "RW") {
+    return(cumsum(rnorm(n)))
+  }
+  if (model == "SZ_trend_lin") {
+  WN <- rnorm(n)
+  delta <- 0.2
+  trend <- delta * 1:n
+  return(WN + trend)
+  }
+}
+
+symulacja <- function(model, n, liczba_powtorzen, h.max, alpha = 0.05) {
+  
+  realizacje <- replicate(liczba_powtorzen, szereg(model, n))
+  
+  wynik_TG  <- test_graficzny(realizacje, h.max = h.max, alpha = alpha)
+  wynik_BP  <- testy_statystyczne(realizacje, h.max = h.max, alpha = alpha, type = "Box-Pierce")
+  wynik_LB  <- testy_statystyczne(realizacje, h.max = h.max, alpha = alpha, type = "Ljung-Box")
+  
+  data.frame(
+    model = model,
+    n = n,
+    liczba_powtorzen = liczba_powtorzen,
+    h.max = h.max,
+    odrz_T_Graf = mean(wynik_TG == 0),
+    odrz_T_BP   = mean(wynik_BP == 0),
+    odrz_T_LB   = mean(wynik_LB == 0)
+  )
+}
+```
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE,  results='hide'}
+modele <- c("BS_norm", "BS_exp", "BS_ber", "MA1", "RW", "SZ_trend_lin")
+dlugosci <- c(25, 50, 100)
+powtorzenia <- c(100, 500, 1000)
+
+h_reguly <- list(
+  male   = function(n) floor(n^(1/3)),
+  srednie = function(n) floor(n/4),
+  duze   = function(n) floor(n/2)
+)
+
+wyniki_sym <- data.frame()
+
+for (m in modele) {
+  for (n in dlugosci) {
+    for (N in powtorzenia) {
+      for (h_nazwa in names(h_reguly)) {
+        h.max <- h_reguly[[h_nazwa]](n)
+        wyn <- symulacja(
+          model = m,
+          n = n,
+          liczba_powtorzen = N,
+          h.max = h.max,
+          alpha = 0.05
+        )
+        wyniki_sym <- rbind(wyniki_sym, wyn)
+      }
+    }
+  }
+}
+
+```
+
+## Wpływ różnych rozkładów na częstość odrzucenia hipotezy o białoszumowości
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+
+wyniki_rozklady <- wyniki_sym %>%
+  filter(liczba_powtorzen == 1000,
+         n == 50,
+         h.max == 12,
+         model %in% c("BS_norm", "BS_exp", "BS_ber")) %>%
+  arrange(model)
+
+wyniki_rozklady %>%
+  kable(
+    format = "latex",
+    digits = 3,
+    booktabs = TRUE,
+    caption = "Wpływ różnych rozkładów na częstość odrzucenia hipotezy o białoszumowości (N = 1000, n = 50, h.max = 12).",
+    align = "c"
+  ) %>%
+  kable_styling(latex_options = "hold_position")
+
+```
+
+Analiza wykazała niewielki wpływ rodzaju rozkładu na działanie testów. Test graficzny konsekwentnie wykazywał wyższy, lecz stabilny poziom odrzuceń w porównaniu do testów formalnych. Testy Boxa-Pierce’a i Ljungi-Boxa utrzymywały niską częstość odrzuceń niezależnie od rozkładu, potwierdzając swoją odporność na jego kształt przy skończonej wariancji.
+
+\newpage
+
+## Wpływ długości szeregu na częstość odrzucenia hipotezy o białoszumowości 
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+
+wyniki_n <- wyniki_sym %>%
+  filter(model == "BS_norm",
+         liczba_powtorzen == 1000,
+         h.max == floor(n/2)) %>%
+  arrange(n)
+
+wyniki_n %>%
+  kable(
+    format = "latex",
+    digits = 3,
+    booktabs = TRUE,
+    caption = "Wpływ długości szeregu n na częstość odrzucenia hipotezy o białoszumowości dla modelu BS\\_norm (N = 1000, h.max = h\\_graniczne).",
+    align = "c"
+  ) %>%
+  kable_styling(latex_options = "hold_position")
+
+```
+
+Wzrost długości szeregu nie przełożył się wprost na wzrost mocy testu graficznego. Test Boxa-Pierce’a zanotował bardzo niską czułość wobec wszystkich analizowanych długości. Test Ljungi-Boxa wykazał względnie stałą i nieco wyższą moc, sugerując mniejszą wrażliwość na krótkie szeregi.
+
+## Wpływ maksymalnego opóźnienia  na częstość odrzucenia hipotezy o białoszumowości
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+
+wyniki_h.max <- wyniki_sym %>%
+  filter(model == "BS_exp",
+         liczba_powtorzen == 1000,
+         n == 100)%>%
+  arrange(h.max)
+
+wyniki_h.max %>%
+  kable(
+    format = "latex",
+    digits = 3,
+    booktabs = TRUE,
+    caption = "Wpływ maksymalnego opóźnienia na częstość odrzucenia hipotezy o białoszumowości dla modelu BS\\_exp (N = 1000, n = 100).",
+    align = "c"
+  ) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+Wyniki demonstrują kluczowy wpływ parametru $h_{max}$ na moc wszystkich badanych testów. W miarę jego zwiększania, czułość testów (poza testem Ljungi-Boxa)  spada, przy czym najbardziej radykalny spadek obserwuje się dla testu Boxa-Pierce'a. Co istotne, nawet test graficzny, uważany za odporniejszy, traci moc przy zbyt dużych opóźnieniach.
+
+\newpage
+
+## Wpływ różnych innych procesów nie będących białym szumem na częstość odrzucenia hipotezy o białoszumowości
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+
+wyniki_rozklady <- wyniki_sym %>%
+  filter(liczba_powtorzen == 1000,
+         n == 100,
+         h.max == 25,
+         model %in% c("MA1", "RW", "SZ_trend_lin")) %>%
+  arrange(model)
+
+wyniki_rozklady %>%
+  kable(
+    format = "latex",
+    digits = 3,
+    booktabs = TRUE,
+    caption = "Wpływ różnych innych procesów nie będących białym szumem na częstość odrzucenia hipotezy o białoszumowości (N = 1000, n = 100, h.max = 25).",
+    align = "c"
+  ) %>%
+  kable_styling(latex_options = "hold_position")
+
+```
+
+Jak można zauważyć wszystkie rozważane procesy, które nie są białym szumem, są prawidłowo rozpoznawane przez testy, częstości odrzucenia hipotezy o białoszumowości są wysokie. Jedynym wyjątkiem jest proces MA(1), dla którego testy formalne rzadziej odrzucają hipotezę o białoszumowości, co jest spowodowane tym, że  MA(1) ma tylko jedną istotną autokorelację, a pozostałe są zerowe.
+
+## Wpływ ilości powtórzeń  na częstość odrzucenia hipotezy o białoszumowości
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+library(kableExtra)
+
+wyniki_rozklady <- wyniki_sym %>%
+  filter(n == 50,
+         h.max == 25,
+         model == "BS_ber")%>%
+  arrange(liczba_powtorzen)
+
+wyniki_rozklady %>%
+  kable(
+    format = "latex",
+    digits = 3,
+    booktabs = TRUE,
+    caption = "Wpływ ilości powtórzeń  na częstość odrzucenia hipotezy o białoszumowości dla modelu BS\\_ber (n = 50, h.max = 25).",
+    align = "c"
+  ) %>%
+  kable_styling(latex_options = "hold_position")
+
+```
+
+Zmiana liczby powtórzeń $N$ wpływa jedynie na niewielkie wahania estymowanych częstości hipotezy o białoszumowości. Zarówno test graficzny, jak i formalne, osiągnęły stateczny poziom mocy już dla $N=500$. Potwierdza to rzetelność procedury symulacyjnej i wiarygodność uzyskanych estymatorów mocy testów.
+
+## Wnioski:
+
+Test graficzny okazał się najbardziej wrażliwy na sam fakt występowania jakiejkolwiek autokorelacji (np. w procesie MA(1)), wykrywając ją tam, gdzie testy formalne zawodziły. Z kolei testy formalne (szczególnie Boxa-Pierce'a) były wrażliwe na dobór parametru maksymalnego opóźnienia $h_{max}$.Testy formalne Boxa-Pierce’a i Ljunga-Boxa charakteryzowały się znacznie większą stabilnością, utrzymywały poziom odrzucenia bliski poziomowi istotności, niezależnie od parametrów symulacji. Wyniki te wskazują, że test graficzny jest użytecznym narzędziem wstępnej diagnostyki, jednak przy analizie danych o małej długości lub przy dużej liczbie opóźnień może być zawodny. Testy formalne są bardziej wiarygodne i powinny stanowić podstawową metodę weryfikacji białoszumowości.
+

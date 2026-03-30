@@ -1,0 +1,544 @@
+---
+title: "Sprawozdanie - Lista 2"
+author: "Mateusz Skuza"
+subtitle: "Analiza szeregów czasowych"
+date: "`r Sys.Date()`"
+header-includes:
+   - \usepackage{longtable}
+   - \usepackage{booktabs}
+   - \usepackage{graphicx}
+   - \usepackage{float}
+   - \usepackage{polyglossia}
+   - \setdefaultlanguage{polish}
+   - \renewcommand{\contentsname}{Spis treści}
+   - \usepackage{placeins}
+   - \usepackage{fvextra}
+   - \fvset{breaklines=true,breakanywhere=true}
+output:
+  pdf_document:
+    toc: true
+    fig_caption: true
+    fig_width: 9
+    fig_height: 8
+    number_sections: true
+    latex_engine: xelatex
+    keep_tex: true
+    dev: "cairo_pdf"
+fontsize: 12pt
+---
+
+```{r setup, include=FALSE, cache=TRUE, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+knitr::opts_chunk$set(fig.pos = "H", out.extra = "", fig.align = "center")
+knitr::opts_chunk$set(dev = "CairoPDF")
+options(encoding = "UTF-8")
+```
+
+```{r, echo =FALSE, warning=FALSE, message=FALSE}
+library(arules)
+library(dplyr)
+library(knitr)
+library(ipred)
+library(forecast)
+library(ggplot2)
+```
+\newpage
+
+# Porównanie dokładności prognoz dla danych `euretail`
+
+## Wprowadzenie
+
+W tym zadaniu analizować będziemy szereg czasowy `euretail` z pakietu `fpp2`. Są to dane pokazujące kwartalne wartości indeksu handlu detalicznego dla strefy euro w latach 1996-2011.
+Głównym celem jest porównanie dokładności prognoz skonstruowanych na bazie modeli ARIMA, modeli dekompozycji oraz algorytmów wygładzania wykładniczego dla tych danych.
+
+W celu wczytania danych, najpierw załadujemy pakiet `fpp2`. Udostępnia on szereg `euretail`, który będziemy analizować.
+
+```{r,  message=FALSE, warning=FALSE}
+library(fpp2)
+```
+
+Przebieg analizy można podzielić na następujące etapy:
+
+* Przygotowanie danych poprzez ich podział na część uczącą i testową.
+* Dopasowanie modeli z trzech grup modeli ARIMA, modeli dekompozycji oraz algorytmów wygładzania wykładniczego. Proces ten obejmie zastosowanie odpowiednich przekształceń wstępnych, wybór odpowiednich wariantów modelu i diagnostykę.
+* Wyznaczenie prognoz dla zbioru testowego przy użyciu dopasowanych modeli oraz wybranej metody referencyjnej (naiwnej).
+* Zestawienie otrzymanych wyników na wykresach w celu wizualnej oceny trafności prognoz w stosunku do wartości rzeczywistych.
+* Porównanie dokładności prognoz dla zbioru testowego i uczącego z uwzględnieniem wybranych miar oceny dokładności.
+
+## Przygotowanie danych
+
+
+Szereg dzielimy na zbiór uczący i testowy. Za zbiór uczący przyjmiemy dane zaobserwowane od roku 1996 do 2008, natomiast jako zbiór testowy posłużą nam dane od roku 2009 do 2011.
+
+```{r, warning=FALSE, message=FALSE}
+zbior_uczacy <- window(euretail, end = c(2008, 4))
+zbior_testowy <- window(euretail, start = c(2009, 1))
+```
+
+\newpage
+
+## Identyfikacja i dopasowanie modeli (S)ARIMA, ETS oraz dekompozycji
+
+**Dopasowanie modeli**
+
+Na tym etapie analizy skupimy się na dopasowaniu trzech różnych rodzajów modeli do zbioru uczącego `zbior_uczacy`. 
+
+\vspace{0.3cm}
+
+**Wizualizacja szeregu w czasie**
+
+Analizę rozpoczynamy od wizualizacji zbioru uczącego przy użyciu funkcji `ggtsdisplay`. Pozwala to na jednoczesną ocenę przebiegu czasowego oraz struktur autokorelacji.
+
+```{r wykres4.b1, fig.width=8, fig.height=6, echo=FALSE, warning=FALSE, message=FALSE, fig.cap="Kwartalne wartości indeksu handlu detalicznego dla strefy euro w latach 1996-2008"}
+ggtsdisplay(zbior_uczacy)
+```
+
+\vspace{0.3cm}
+
+Analizowany szereg charakteryzuje się wyraźnym, wzrostowym trendem oraz regularną sezonowością kwartalną. Słupki na wykresie funkcji autokorelacji (`ACF`) maleją w bardzo powolnym tempie, co potwierdza obecność trendu i niestacjonarność średniej. Ponadto falujący kształt funkcji `ACF` jest wynikiem występowania silnej sezonowości. Wykres funkcji częściowej autokorelacji (`PACF`) ujawnia istotne statystycznie słupki, w szczególności dla pierwszego opóźnienia oraz opóźnień związanych z cyklem kwartalnym. Na podstawie tych obserwacji można jednoznacznie stwierdzić, że szereg nie jest stacjonarny.
+
+\vspace{0.3cm}
+
+**Transformacja szeregu - Transformacja Boxa-Coxa**
+
+Na wykresie widać, że wartości wariancji są niestabilne, dlatego przed wyborem odpowiedniego wariantu modelu należy użyć transformacji Boxa-Coxa z odpowiednim parametrem $\lambda$. Do wyznaczenia go wykorzystamy funkcję `BoxCox.lambda`.
+
+```{r, warning=FALSE, results='hide', message=FALSE}
+BoxCox.lambda(zbior_uczacy, "loglik")
+zbior_uczacy_BC <- BoxCox(zbior_uczacy, lambda = 2)
+```
+
+Widać, że optymalna $\lambda = 2$. Sprawdźmy, jak wygląda nasz szereg po tej transformacji.
+
+```{r, fig.width=8, fig.height=6, warning=FALSE, message=FALSE, fig.pos="H", out.extra="", fig.cap="Szereg czasowy po transformacji Boxa-Coxa"}
+ggtsdisplay(zbior_uczacy_BC)
+```
+
+\newpage
+
+Na podstawie rysunku widać, że dzięki użyciu transformacji Boxa-Coxa z $\lambda=2$ wariancja stała się bardziej jednorodna. Wykres czasowy oraz `ACF` wskazują, że dane wciąż wymagają różnicowania w celu eliminacji silnego trendu wzrostowego oraz sezonowości.
+
+\vspace{0.3cm}
+
+**Transformacja szeregu - różnicowanie**
+
+Kolejnym niezbędnym etapem przygotowania danych jest eliminacja niestacjonarności w średniej, czyli usunięcie trendu oraz sezonowości. Na podstawie wyników funkcji `ndiffs` oraz `nsdiffs` wyznaczamy rzędy odpowiednio różnicowania zwykłego oraz sezonowego.
+
+```{r, warning=FALSE, results='hide', message=FALSE}
+ndiffs(zbior_uczacy) 
+```
+```{r, warning=FALSE, results='hide', message=FALSE}
+nsdiffs(zbior_uczacy) 
+```
+
+Widać, że rząd różnicowania zwykłego $d=1$ oraz rząd różnicowania sezonowego $D=1$. Oznacza to, że w celu uzyskania stacjonarności konieczne jest zastosowanie zarówno różnicowania zwykłego `lag = 1`, jak i różnicowania sezonowego pierwszego stopnia `lag = 4`, co wynika z kwartalnej częstotliwości danych.
+
+```{r, warning=FALSE, message=FALSE}
+zbior_uczacy.4 <- diff(zbior_uczacy, lag=4)
+zbior_uczacy.4.1 <- diff(zbior_uczacy.4, lag=1)
+```
+
+Sprawdźmy, jak wygląda nasz szereg po tej transformacji.
+
+```{r, fig.width=8, fig.height=6, fig.pos="H", out.extra="", warning=FALSE, message=FALSE , fig.cap="Szereg czasowy po operacjach różnicowania"}
+ggtsdisplay(zbior_uczacy.4.1)
+```
+
+Wizualna analiza wykresów po wykonaniu obu różnicowań wskazuje, że po usunięciu trendu i sezonowości wartości oscylują wokół stałej średniej, a autokorelacje wygasają gwałtownie. Pozwala to uznać szereg za stacjonarny w sensie słabym. Dzięki temu, możemy przejść do dokonywania wyborów odpowiednich wariantów modeli.
+
+\vspace{0.3cm}
+
+**Dopasowanie modelu ARIMA**
+
+Wykresy funkcji autokorelacji (`ACF`) oraz częściowej autokorelacji (`PACF`) sugerują, że dane są realizacją procesów:
+
+* Ruchomej średniej rzędu $q=4$,
+* Autogresji rzędu $p=4$.
+
+Sprawdzimy zatem modele $\text {ARIMA}(4, 1, 0)$ oraz $\text {ARIMA}(0, 1, 4)$ dla oryginalnych danych. Oprócz nich zostaną sprawdzone modele automatyczne $\text{ARIMA}$ optymalizujące kryteria AICc oraz BIC.
+
+```{r, warning=FALSE, message=FALSE}
+model_ar <- Arima(zbior_uczacy, order=c(4,1,0), seasonal=c(0,1,0),
+                  lambda=2)
+model_ma <- Arima(zbior_uczacy, order=c(0,1,4), seasonal=c(0,1,0), 
+                  lambda=2)
+model_automatyczny.aicc <- auto.arima(zbior_uczacy, stepwise=FALSE, 
+                           approximation=FALSE, lambda=2, ic="aicc")
+model_automatyczny.bic <- auto.arima(zbior_uczacy, stepwise=FALSE, 
+                          approximation=FALSE, lambda=2, ic="bic")
+```
+
+W przypadku modeli  $\text {ARIMA}(4, 1, 0)$ oraz $\text {ARIMA}(0, 1, 4)$ warto sprawdzić istotność współczynników. 
+
+```{r, results='hide', warning=FALSE, message=FALSE}
+lmtest::coeftest(model_ar)
+lmtest::coeftest(model_ma)
+```
+
+Po sprawdzeniu istotności w przypadku modelu $\text {ARIMA}(4, 1, 0)$ istotny okazał się jedynie współczynnik 4, natomiast w przypadku modelu $\text {ARIMA}(0, 1, 4)$ współczynniki 3 i 4. 
+
+\vspace{0.3cm}
+
+```{r, warning=FALSE, message=FALSE}
+ar_fixed <- c(0, 0, 0, NA)
+ma_fixed <- c(0, 0, NA, NA)
+model_ar_fixed <- Arima(zbior_uczacy, order=c(4,1,0), seasonal=c(0,1,0),
+                        lambda=2, fixed=ar_fixed)
+model_ma_fixed <- Arima(zbior_uczacy, order=c(0,1,4), seasonal=c(0,1,0),
+                        lambda=2, fixed=ma_fixed)
+```
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE}
+wyniki_arima <- data.frame(
+  Model = c("ARIMA(4,1,0) - Pełny", "ARIMA(4,1,0) - Zredukowany", 
+            "ARIMA(0,1,4) - Pełny", "ARIMA(0,1,4) - Zredukowany"),
+  AICc = c(model_ar$aicc, model_ar_fixed$aicc, model_ma$aicc, model_ma_fixed$aicc),
+  BIC = c(model_ar$bic, model_ar_fixed$bic, model_ma$bic, model_ma_fixed$bic)
+)
+
+kable(wyniki_arima, 
+      digits = 2, 
+      caption = "Porównanie kryteriów informacyjnych dla modeli ARIMA",
+      col.names = c("Model", "AICc", "BIC"))
+```
+
+Widać, że modele zredukowane są lepsze od pełnych zarówno dla procesu AR, jak i MA, ponieważ usunięcie nieistotnych statystycznie parametrów pozwoliło uzyskać niższe wartości kryteriów AICc oraz BIC.
+
+\newpage
+
+**Diagnostyka modeli ARIMA**
+
+* **Zredukowany model** $\text{ARIMA}(4, 1, 0)$
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Diagnostyka reszt zredukowanego modelu ARIMA(4,1,0)"}
+ggtsdisplay(residuals(model_ar_fixed), plot.type = "histogram")
+```
+
+Na wizualizacji można dostrzec obecność istotnego skoku na wykresie ACF dla pierwszego opóźnienia,  co sugeruje, że model nie zdołał w pełni wyeliminować autokorelacji z danych.
+
+\newpage
+
+* **Zredukowany model** $\text{ARIMA}(0, 1, 4)$
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Diagnostyka reszt zredukowanego modelu ARIMA(0,1,4)"}
+ggtsdisplay(residuals(model_ma_fixed), plot.type = "histogram")
+```
+
+Podobnie jak w poprzednim przypadku, reszty wykazują silną zależność przy lag 1, a histogram wskazuje na wyraźną lewostronną asymetrię błędów prognozy.
+
+\newpage 
+
+* **Model automatyczny** $\text{ARIMA}$ **optymalizujący kryterium AICc (ten sam model co model optymalizujący kryterium BIC)**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Diagnostyka reszt modelu automatycznego ARIMA"}
+ggtsdisplay(residuals(model_automatyczny.aicc), plot.type = "histogram")
+```
+
+Jest to model o najlepszych parametrach diagnostycznych, ponieważ wszystkie autokorelacje reszt mieszczą się w granicach błędu, a ich rozkład jest niemal idealnie symetryczny i zbliżony do normalnego.
+
+\newpage
+
+**Dopasowanie modeli dekompozycji**
+
+Ze względu na obecność wyraźnego trendu, który może mieć nieliniowy charakter a także występowanie regularnych wahań sezonowych rozważymy trzy modele dekompozycji o rosnącym stopniu złożoności:
+
+* model z trendem liniowym,
+* model z trendem liniowym i sezonowością,
+* model z trendem kwadratowym i sezonowością.
+
+```{r, warning=FALSE, message=FALSE}
+model_tl <- tslm(zbior_uczacy ~ trend)
+model_tls <- tslm(zbior_uczacy ~ trend + season)
+model_tks <- tslm(zbior_uczacy ~ trend + I(trend^2) + season)
+```
+
+\newpage
+
+**Diagnostyka modeli dekompozycji**
+
+* **Model z trendem liniowym**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Diagnostyka reszt modelu z trendem liniowym"}
+ggtsdisplay(residuals(model_tl), plot.type = "histogram")
+```
+
+Na wykresie można dostrzec, że reszty wykazują wyraźny, paraboliczny wzorzec oraz silną sezonowość, co w połączeniu z wolno wygasającą funkcją ACF świadczy o całkowitym niedopasowaniu modelu do struktury danych.
+
+\newpage
+
+* **Model z trendem liniowym i sezonowością**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Diagnostyka reszt modelu z trendem liniowym i sezonowością"}
+ggtsdisplay(residuals(model_tls), plot.type = "histogram")
+```
+
+Na wizualizacji widać, że mimo wyeliminowania części wahań sezonowych, w resztach nadal utrzymuje się nieliniowy trend i wysoka autokorelacja, co wskazuje na nieadekwatność założenia o liniowym wzroście szeregu.
+
+\newpage
+
+* **Model z trendem kwadratowym i sezonowością**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Diagnostyka reszt modelu z trendem kwadratowym i sezonowością"}
+ggtsdisplay(residuals(model_tks), plot.type = "histogram")
+```
+
+Ostatni wykres jest najlepiej dopasowanym modelem z tej grupy, o rozkładzie reszt zbliżonym do normalnego, choć istotne skoki w ACF sugerują, że sama regresja nie wyłapuje wszystkich krótkookresowych zależności tak skutecznie jak modele klasy ARIMA.
+
+\newpage
+
+**Dopasowanie modeli algorytmów wygładzania wykładniczego (modeli ETS)**
+
+Z uwagi na to, że analizowany szereg czasowy charakteryzuje się wyraźnym trendem oraz sezonowością, najlepiej odpowiadającymi strukturze szeregu modelami bedą:
+
+* Model Holta-Wintersa z sezonowością addytywną,
+* Model Holta-Wintersa z sezonowością multiplikatywną,
+* Model ETS dobierany automatycznie.
+
+```{r, warning=FALSE, message=FALSE}
+model_hw_add <- hw(zbior_uczacy, seasonal="additive")
+model_hw_mult <- hw(zbior_uczacy, seasonal="multiplicative")
+model_auto_ets <- ets(zbior_uczacy)
+```
+
+\newpage
+
+**Diagnostyka modeli algorytmów wygładzania wykładniczego (modeli ETS)**
+
+* **Model Holta-Wintersa z sezonowością addytywną**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Diagnostyka reszt modelu Holta-Wintersa z sezonowością addytywną"}
+ggtsdisplay(residuals(model_hw_add), plot.type = "histogram")
+```
+
+Z wykresu możemy odczytać, że histogram reszt sugeruje lekką asymetrię rozkładu, przez co model nie w pełni spełnia założenia o losowości składnika resztowego.
+
+\newpage
+
+* **Model Holta-Wintersa z sezonowością multiplikatywną**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE , fig.cap= "Diagnostyka reszt modelu Holta-Wintersa z sezonowością multiplikatywną"}
+ggtsdisplay(residuals(model_hw_mult), plot.type = "histogram")
+```
+
+Na tym wykresie widać, że rozkład reszt jest bardziej symetryczny, co wskazuje na poprawę dopasowania, choć zależności czasowe nie zostały całkowicie wyeliminowane.
+
+\newpage
+
+* **Model ETS dobierany automatycznie**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Diagnostyka reszt modelu ETS dobieranego automatycznie"}
+ggtsdisplay(residuals(model_auto_ets), plot.type = "histogram")
+```
+
+Z tej wizualizacji widzimy, że histogram reszt jest zbliżony do rozkładu normalnego, co wskazuje na najlepsze własności diagnostyczne spośród analizowanych modeli.
+
+\newpage
+
+## Konstrukcja prognoz i wybór metody referencyjnej
+
+**Wyznaczenie prognoz dla zbioru testowego**
+
+W tej części skupimy się na dla zbioru testowego na podstawie dopasowanych modeli 
+oraz metody referencyjnej `snaive()` z pakietu `forecast`. Żeby tego dokonać, na początku wyznaczymy długość horyzontu prognoz.
+
+```{r, warning=FALSE, message=FALSE}
+h <- length(zbior_testowy)
+```
+
+Do wyznaczenia prognoz na podstawie dopasowanych modeli ($\text {ARIMA}$, modele dekompozycji, automatyczny model ETS) wykorzystana zostanie funkcja `forecast`, która przyjmuje dopasowany model i generuje dla niego przewidywania na określony horyzont czasowy. Dla modeli Holta-Wintersa oraz metody naiwnej wykorzystamy odpowiednio funkcje `hw()` oraz `snaive()`.
+
+```{r, warning=FALSE, message=FALSE}
+prognoza_model_ar_fixed <- forecast::forecast(model_ar_fixed, h=h)
+prognoza_model_ma_fixed <- forecast::forecast(model_ma_fixed, h=h)
+prognoza_model_automatyczny.aicc <- 
+  forecast::forecast(model_automatyczny.aicc, h=h)
+prognoza_model_tl <- forecast::forecast(model_tl, h=h)
+prognoza_model_tls <- forecast::forecast(model_tls, h=h)
+prognoza_model_tks <- forecast::forecast(model_tks, h=h)
+prognoza_model_hw_add <- hw(zbior_uczacy, seasonal="additive", h = h)
+prognoza_model_hw_mult <- hw(zbior_uczacy, seasonal="multiplicative", 
+                             h = h)
+prognoza_model_auto_ets <- forecast::forecast(model_auto_ets, h=h)
+prognoza_naiwna <- snaive(x=zbior_uczacy, h=h)
+```
+
+\newpage
+
+## Wizualizacja i porównanie graficzne prognoz
+
+Na tym etapie analizy zostanie przeprowadzona seria wykresów przedstawiająca skonstruowane prognozy i porównująca je z wartościami rzeczywistymi.
+
+**Wykresy dla prognoz na podstawie modeli ARIMA**
+
+* **Wykres dla prognozy na podstawie zredukowanego modelu**  $\text{ARIMA}(4, 1, 0)$
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Prognoza na podstawie zredukowanego modelu ARIMA(4,1,0)"}
+autoplot(prognoza_model_ar_fixed) + autolayer(zbior_testowy)
+```
+
+Prognoza na podstawie tego modelu okazała się mało trafna, model wyraźnie zawyża przyszłe wartości względem rzeczywistości.
+
+\newpage
+
+* **Wykres dla prognozy  na podstawie zredukowanego modelu**  $\text{ARIMA}(0, 1, 4)$
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE , fig.cap= "Prognoza na podstawie zredukowanego modelu ARIMA(0,1,4)"}
+autoplot(prognoza_model_ma_fixed) + autolayer(zbior_testowy)
+```
+
+Prognoza na podstawie tego modelu okazała się nieskuteczna, rzeczywiste dane nie mieszczą się w przedziałach ufności.
+
+\newpage
+
+* **Wykres dla prognozy na podstawie modelu automatycznego** $\text{ARIMA}$
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Prognoza na podstawie modelu automatycznego ARIMA"}
+autoplot(prognoza_model_automatyczny.aicc) + autolayer(zbior_testowy)
+```
+
+Prognoza na podstawie tego modelu okazała się niezbyt trafna, model wyraźnie zawyża przyszłe wartości względem rzeczywistości, ale rzeczywiste dane mieszczą się w szerokim przedziale ufności. Jest ona skuteczniejsza niż pozostałe prognozy na podstawie modeli ARIMA. 
+
+\newpage
+
+**Wykresy dla prognoz na podstawie modeli dekompozycji**
+
+* **Wykres dla prognozy na podstawie modelu z trendem liniowym**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Prognoza na podstawie modelu z trendem liniowym"}
+autoplot(prognoza_model_tl) + autolayer(zbior_testowy)
+```
+
+Model zupełnie nie radzi sobie z rzeczywistym spadkiem wartości, prognozując nierealistyczny, jednostajny wzrost poza próbę uczącą.
+
+\newpage
+
+* **Wykres dla prognozy na podstawie modelu z trendem liniowym i sezonowością**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Prognoza na podstawie modelu z trendem liniowym i sezonowością"}
+autoplot(prognoza_model_tls) + autolayer(zbior_testowy)
+```
+
+Mimo dodania wahań sezonowych, błędne założenie o trendzie wzrostowym powoduje, że prognoza drastycznie rozmija się z faktycznymi danymi.
+
+\newpage
+
+* **Wykres dla prognozy na podstawie modelu z trendem kwadratowym i sezonowością**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Prognoza na podstawie modelu z trendem kwadratowym i sezonowością"}
+autoplot(prognoza_model_tks) + autolayer(zbior_testowy)
+```
+
+Bardziej złożony trend nie pozwolił na uchwycenie zmiany kierunku szeregu, przez co model ten wciąż bardzo mocno przeszacowuje przyszłe wyniki. Żadna z prognoz na podstawie modeli dekompozycji nie odzwierciedliła poprawnie rzeczywistości.
+
+\newpage
+
+**Wykresy dla prognoz na podstawie modeli algorytmów wygładzania wykładniczego (modeli ETS) **
+
+* **Wykres dla prognozy na podstawie modelu Holta-Wintersa z sezonowością addytywną**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Prognoza na podstawie modelu  Holta-Wintersa z sezonowością addytywną"}
+autoplot(prognoza_model_hw_add) + autolayer(zbior_testowy)
+```
+
+Model wykazuje się dużą celnością, trafnie odczytując zmianę trendu na spadkowy w okresie testowym.
+
+\newpage
+
+* **Wykres dla prognozy na podstawie modelu Holta-Wintersa z sezonowością multiplikatywną**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE , fig.cap= "Prognoza na podstawie modelu  Holta-Wintersa z sezonowością multiplikatywną"}
+autoplot(prognoza_model_hw_mult) + autolayer(zbior_testowy)
+```
+
+Linia prognozy bardzo stabilnie i precyzyjnie podąża za danymi rzeczywistymi, co świadczy o wysokiej jakości dopasowania.
+
+\newpage
+
+* **Wykres dla prognozy na podstawie modelu ETS dobieranego automatycznie**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Prognoza na podstawie modelu ETS dobieranego automatycznie"}
+autoplot(prognoza_model_auto_ets) + autolayer(zbior_testowy)
+```
+
+Linia prognozy ponownie bardzo stabilnie i precyzyjnie podąża za danymi rzeczywistymi, co świadczy o wysokiej jakości dopasowania. Wszystkie prognozy na podstawie  modeli algorytmów wygładzania wykładniczego trafnie przewidziały rzeczywistość. 
+
+
+\newpage 
+
+**Wykres prognozy na podstawie metody naiwnej**
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE, fig.cap= "Prognoza na podstawie metody naiwnej"}
+autoplot(prognoza_naiwna) + autolayer(zbior_testowy)
+```
+
+Prognoza naiwna powielająca wzorzec sezonowy z poprzedniego roku, nie radzi sobie z rzeczywistym spadkiem wartości.
+
+Na postawie wykresów możemy wywnioskować, że największą skutecznością zdecydowanie wykazały się prognozy na podstawie modeli algorytmów wygładzania wykładniczego, trafność prognoz na podstawie modeli ARIMA była umiarkowana, natomiast prognozy naiwan oraz na podstawie modeli dekompozycji okazały się być nieskuteczne. 
+
+\newpage
+
+## Ilościowa ocena jakości predykcji (RMSE, MAE, MAPE)
+
+Na tym etapie ponownie ocenimy dokładności prognoz, tym razem zrobimy to dla zbioru testowego i uczącego z uwzględnieniem wybranych miar oceny dokładności. Do oceny jakości modeli wykorzystamy funkcję `accuracy()`, która wyznacza standardowe metryki błędów. Skupimy się na miarach: 
+
+* RMSE - pierwiastek błędu średniokwadratowego,
+* MAE - średni błąd bezwzględny, 
+* MAPE - średni procentowy błąd bezwzględny.
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE}
+tabela_dokladnosci <- rbind(
+  "Zredukowany model ARIMA(4,1,0)" = accuracy(prognoza_model_ar_fixed, zbior_testowy)[2,],
+  "Zredukowany model ARIMA(0,1,4)" = accuracy(prognoza_model_ma_fixed, zbior_testowy)[2,],
+  "Model automatyczny ARIMA" = accuracy(prognoza_model_automatyczny.aicc, zbior_testowy)[2,],
+  "Model dekompozycji z trendem" = accuracy(prognoza_model_tl, zbior_testowy)[2,],
+  "Model dekompozycji z trendem i sezonowością" = accuracy(prognoza_model_tls, zbior_testowy)[2,],
+  "Model dekompozycji z trendem kwadratowym i sezonowością" = accuracy(prognoza_model_tks, zbior_testowy)[2,],
+  "Model ETS H-W z sezonowością addytywną" = accuracy(prognoza_model_hw_add, zbior_testowy)[2,],
+  "Model ETS H-W z sezonowością multiplikatywną" = accuracy(prognoza_model_hw_mult, zbior_testowy)[2,],
+  "Model automatyczny ETS"  = accuracy(prognoza_model_auto_ets, zbior_testowy)[2,],
+  "Model naiwny" = accuracy(prognoza_naiwna, zbior_testowy)[2,]
+)
+knitr::kable(tabela_dokladnosci[, c("RMSE", "MAE", "MAPE")], 
+             digits = 2, 
+             caption = "Porównanie dokładności prognoz na zbiorze testowym") %>%
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+
+Wyniki z tabeli podobnie jak seria wykresów wyraźnie pokazują, modele z grupy ETS są najlepszym wyborem, ich błędy są zdecydowanie najniższe, natomiast najgorzej wypadły modele dekompozycji.
+
+\newpage
+
+```{r,echo=FALSE, warning=FALSE, message=FALSE}
+tabela_dokladnosci_uczacy <- rbind(
+  "Zredukowany model ARIMA(4,1,0)" = accuracy(prognoza_model_ar_fixed, zbior_testowy)[1,],
+  "Zredukowany model ARIMA(0,1,4)" = accuracy(prognoza_model_ma_fixed, zbior_testowy)[1,],
+  "Model automatyczny ARIMA" = accuracy(prognoza_model_automatyczny.aicc, zbior_testowy)[1,],
+  "Model dekompozycji z trendem" = accuracy(prognoza_model_tl, zbior_testowy)[1,],
+  "Model dekompozycji z trendem i sezonowością" = accuracy(prognoza_model_tls, zbior_testowy)[1,],
+  "Model dekompozycji z trendem kwadratowym i sezonowością" = accuracy(prognoza_model_tks, zbior_testowy)[1,],
+  "Model ETS H-W z sezonowością addytywną" = accuracy(prognoza_model_hw_add, zbior_testowy)[1,],
+  "Model ETS H-W z sezonowością multiplikatywną" = accuracy(prognoza_model_hw_mult, zbior_testowy)[1,],
+  "Model automatyczny ETS"  = accuracy(prognoza_model_auto_ets, zbior_testowy)[1,],
+  "Model naiwny" = accuracy(prognoza_naiwna, zbior_testowy)[1,]
+)
+
+knitr::kable(tabela_dokladnosci_uczacy[, c("RMSE", "MAE", "MAPE")], 
+             digits = 2, 
+             caption = "Porównanie dokładności prognoz na zbiorze uczącym") %>%
+  kableExtra::kable_styling(latex_options = "hold_position")
+```
+
+W zbiorze uczącym najlepsze dopasowanie uzyskały modele klasy ARIMA, osiągając najniższe błędy. Najsłabsze wyniki odnotowano dla modelu naiwnego oraz prostych modeli dekompozycji, których błędy są kilkukrotnie wyższe od pozostałych metod.
+
+\vspace{0.3cm}
+
+## Wnioski i wybór optymalnego modelu
+
+* Na podstawie przeprowadzonej analizy możemy dostrzec, że kluczowym wyzwaniem w procesie prognozowania było nagłe załamanie trendu wzrostowego, które wystąpiło w okresie testowym (lata 2009–2011).
+
+* Ostatecznie najbardziej adekwatnym podejściem okazało się wygładzanie wykładnicze, a konkretnie za najbardziej optymalny model możemy uznać automatyczny model ETS. 
+
+* Modele ARIMA, dobrego dopasowania do danych historycznych, okazały się zbyt sztywne i znacząco przeszacowały prognozy na zbiorze testowym. 
+
+* Modele dekompozycji oraz metoda naiwna okazały się najmniej skuteczne. Założenie o stałym trendzie liniowym lub kwadratowym  czy też powielenie wzorca sezonowego sprawiły, że modele te zupełnie nie zauważyły zmiany kierunku szeregu, co dyskwalifikuje je jako narzędzie prognostyczne w tym przypadku.
